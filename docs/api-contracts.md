@@ -30,5 +30,6 @@
 |---|---|---|---|
 | POST | `/api/v1/history` | `{location, latitude, longitude, forecast_snapshot}` | `201 HistoryRecord` |
 | GET | `/api/v1/history` | `location`, `page`, `size` (≤100) | `200 {items, total, page, size}` |
+| GET | `/api/v1/history/{id}` | — | `200 HistoryRecord` зі знімком прогнозу; `404` |
 | DELETE | `/api/v1/history/{id}` | — | `204`; `404` — чужий або відсутній запис |
 | GET | `/api/v1/history/export` | `fmt=json\|csv` | файл експорту |

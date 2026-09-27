@@ -61,3 +61,11 @@ def test_export_csv_and_json():
 
 def test_user_header_is_required():
     assert client.get("/api/v1/history").status_code == 422
+
+
+def test_get_record_returns_snapshot_for_owner_only():
+    rid = client.post("/api/v1/history", json=record(temp=5.5), headers=ALICE).json()["id"]
+    r = client.get(f"/api/v1/history/{rid}", headers=ALICE)
+    assert r.status_code == 200
+    assert r.json()["forecast_snapshot"]["current"]["temperature_c"] == 5.5
+    assert client.get(f"/api/v1/history/{rid}", headers=BOB).status_code == 404

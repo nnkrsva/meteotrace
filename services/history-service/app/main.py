@@ -68,15 +68,6 @@ def list_records(
     return Page(items=items[start : start + size], total=len(items), page=page, size=size)
 
 
-@app.delete("/api/v1/history/{record_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_record(record_id: str, x_user_id: str = Header()) -> Response:
-    record = _records.get(record_id)
-    if not record or record["user_id"] != x_user_id:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Record not found")
-    del _records[record_id]
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
 @app.get("/api/v1/history/export")
 def export(x_user_id: str = Header(), fmt: str = Query("json", pattern="^(json|csv)$")):
     items = _user_records(x_user_id)
@@ -95,3 +86,21 @@ def export(x_user_id: str = Header(), fmt: str = Query("json", pattern="^(json|c
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=history.csv"},
     )
+
+
+@app.get("/api/v1/history/{record_id}", response_model=HistoryOut)
+def get_record(record_id: str, x_user_id: str = Header()) -> HistoryOut:
+    """Return a saved request together with its forecast snapshot."""
+    record = _records.get(record_id)
+    if not record or record["user_id"] != x_user_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Record not found")
+    return HistoryOut(**record)
+
+
+@app.delete("/api/v1/history/{record_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_record(record_id: str, x_user_id: str = Header()) -> Response:
+    record = _records.get(record_id)
+    if not record or record["user_id"] != x_user_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Record not found")
+    del _records[record_id]
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
