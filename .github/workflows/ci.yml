@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Визначає, які частини монорепозиторію змінилися
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      services: ${{ steps.list.outputs.services }}
+      frontend: ${{ steps.filter.outputs.frontend == 'true' || steps.filter.outputs.shared == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            shared:
+              - '.github/workflows/**'
+              - 'ruff.toml'
+            auth-service:
+              - 'services/auth-service/**'
+            forecast-service:
+              - 'services/forecast-service/**'
+            history-service:
+              - 'services/history-service/**'
+            frontend:
+              - 'frontend/**'
+      - name: Build list of services to test
+        id: list
+        env:
+          CHANGES: ${{ steps.filter.outputs.changes }}
+        run: |
+          if echo "$CHANGES" | jq -e 'index("shared")' > /dev/null; then
+            services='["auth-service","forecast-service","history-service"]'
+          else
+            services=$(echo "$CHANGES" | jq -c '[.[] | select(endswith("-service"))]')
+          fi
+          echo "services=$services" >> "$GITHUB_OUTPUT"
+          echo "Services to test: $services"
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  python-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install ruff==0.16.9
+      - name: Ruff lint
+        run: ruff check --output-format=github .
+      - name: Ruff format check
+        run: ruff format --check .
+
+  python-tests:
+    needs: changes
+    if: ${{ needs.changes.outputs.services != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: services/${{ matrix.service }}/requirements*.txt
+      - run: pip install -r requirements-dev.txt
+      - name: PyTest (coverage >= 75%)
+        run: pytest --cov=app --cov-report=term-missing --cov-fail-under=75
+
+  frontend:
+    needs: changes
+    if: ${{ needs.changes.outputs.frontend == 'true' }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: ESLint + TypeScript
+        run: npm run lint
+      - name: Vitest (coverage >= 75%)
+        run: npm test
+      - name: Build
+        run: npm run build
+
+  # Єдина обов'язкова перевірка для правила захисту гілки main
+  ci-success:
+    if: always()
+    needs: [changes, secret-scan, python-lint, python-tests, frontend]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        run: |
+          echo '${{ toJSON(needs) }}' | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if echo '${{ toJSON(needs) }}' | jq -e 'any(.[]; .result == "failure" or .result == "cancelled")' > /dev/null; then
+            echo "CI failed"; exit 1
+          fi
+          echo "All required checks passed"

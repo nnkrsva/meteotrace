@@ -1,0 +1,4 @@
+title = "MeteoTrace gitleaks config"
+
+[extend]
+useDefault = true
