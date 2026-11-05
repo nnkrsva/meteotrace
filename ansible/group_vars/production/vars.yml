@@ -1,0 +1,23 @@
+---
+app_name: meteotrace
+app_dir: /opt/meteotrace
+app_port: 8000
+app_image: meteotrace/forecast-service
+app_version: "1.0.0"
+server_name: meteotrace.local
+
+system_packages:
+  - docker.io
+  - python3-requests
+  - python3-passlib
+  - nginx
+  - prometheus-node-exporter
+
+scrape_targets:
+  - { job: prometheus, target: "127.0.0.1:9090" }
+  - { job: node, target: "127.0.0.1:9100" }
+
+prometheus_user: admin
+prometheus_password: "{{ vault_prometheus_password }}"
+api_key: "{{ vault_api_key }}"
+prometheus_image: prom/prometheus:v2.53.0
