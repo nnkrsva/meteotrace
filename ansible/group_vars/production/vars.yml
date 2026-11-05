@@ -11,7 +11,6 @@ system_packages:
   - python3-requests
   - python3-passlib
   - nginx
-  - prometheus
   - prometheus-node-exporter
 
 scrape_targets:
@@ -21,3 +20,4 @@ scrape_targets:
 prometheus_user: admin
 prometheus_password: "{{ vault_prometheus_password }}"
 api_key: "{{ vault_api_key }}"
+prometheus_image: prom/prometheus:v2.53.0

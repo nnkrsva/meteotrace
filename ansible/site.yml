@@ -17,18 +17,26 @@
         update_cache: yes
         cache_valid_time: 3600
 
+    - name: Remove distro Prometheus (built without web UI)
+      apt:
+        name: prometheus
+        state: absent
+
     - name: Ensure services are running
       service:
         name: "{{ item }}"
         state: started
         enabled: yes
-      loop: [docker, nginx, prometheus, prometheus-node-exporter]
+      loop: [docker, nginx, prometheus-node-exporter]
 
-    - name: Create app directory
+    - name: Create directories
       file:
-        path: "{{ app_dir }}"
+        path: "{{ item }}"
         state: directory
         mode: '0750'
+      loop:
+        - "{{ app_dir }}"
+        - "{{ app_dir }}/prometheus"
 
     - name: Copy forecast-service sources
       copy:
@@ -63,7 +71,7 @@
 
     - name: Wait until application responds
       uri:
-        url: "http://127.0.0.1:{{ app_port }}/docs"
+        url: "http://127.0.0.1:{{ app_port }}/health"
       register: app_health
       until: app_health.status == 200
       retries: 10
@@ -72,16 +80,32 @@
     - name: Deploy Prometheus config
       template:
         src: templates/prometheus.yml.j2
-        dest: /etc/prometheus/prometheus.yml
-        validate: promtool check config %s
+        dest: "{{ app_dir }}/prometheus/prometheus.yml"
+        mode: '0644'
       notify: Restart prometheus
 
-    - name: Prometheus listens only on localhost behind nginx
-      lineinfile:
-        path: /etc/default/prometheus
-        regexp: '^ARGS='
-        line: 'ARGS="--web.listen-address=127.0.0.1:9090 --web.external-url=http://{{ server_name }}/prometheus/ --web.route-prefix=/"'
-      notify: Restart prometheus
+    - name: Run Prometheus container
+      community.docker.docker_container:
+        name: prometheus
+        image: "{{ prometheus_image }}"
+        state: started
+        restart_policy: unless-stopped
+        network_mode: host
+        volumes:
+          - "{{ app_dir }}/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro"
+        command:
+          - "--config.file=/etc/prometheus/prometheus.yml"
+          - "--web.listen-address=127.0.0.1:9090"
+          - "--web.external-url=http://{{ server_name }}/prometheus/"
+          - "--web.route-prefix=/"
+
+    - name: Wait until Prometheus is ready
+      uri:
+        url: "http://127.0.0.1:9090/-/ready"
+      register: prom_ready
+      until: prom_ready.status == 200
+      retries: 10
+      delay: 3
 
     - name: Basic auth for Prometheus
       community.general.htpasswd:
@@ -115,11 +139,8 @@
         restart: true
 
     - name: Restart prometheus
-      service:
+      community.docker.docker_container:
         name: prometheus
-        state: restarted
-
-    - name: Reload nginx
-      service:
-        name: nginx
-        state: reloaded
+        image: "{{ prometheus_image }}"
+        state: started
+        restart: true
