@@ -1,0 +1,125 @@
+---
+- name: Deploy MeteoTrace to production (stage 5)
+  hosts: production
+  become: yes
+
+  pre_tasks:
+    - name: Check OS family
+      assert:
+        that: ansible_facts['os_family'] == "Debian"
+        fail_msg: "Only Debian-family systems are supported"
+
+  tasks:
+    - name: Install system packages
+      apt:
+        name: "{{ system_packages }}"
+        state: present
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Ensure services are running
+      service:
+        name: "{{ item }}"
+        state: started
+        enabled: yes
+      loop: [docker, nginx, prometheus, prometheus-node-exporter]
+
+    - name: Create app directory
+      file:
+        path: "{{ app_dir }}"
+        state: directory
+        mode: '0750'
+
+    - name: Copy forecast-service sources
+      copy:
+        src: "{{ playbook_dir }}/../services/forecast-service/"
+        dest: "{{ app_dir }}/forecast-service/"
+
+    - name: Write secrets to env file
+      template:
+        src: templates/app.env.j2
+        dest: "{{ app_dir }}/.env"
+        mode: '0600'
+      no_log: true
+      notify: Restart app container
+
+    - name: Build application image
+      community.docker.docker_image:
+        name: "{{ app_image }}"
+        tag: "{{ app_version }}"
+        source: build
+        build:
+          path: "{{ app_dir }}/forecast-service"
+
+    - name: Run application container
+      community.docker.docker_container:
+        name: forecast-service
+        image: "{{ app_image }}:{{ app_version }}"
+        state: started
+        restart_policy: unless-stopped
+        published_ports:
+          - "127.0.0.1:{{ app_port }}:8000"
+        env_file: "{{ app_dir }}/.env"
+
+    - name: Wait until application responds
+      uri:
+        url: "http://127.0.0.1:{{ app_port }}/docs"
+      register: app_health
+      until: app_health.status == 200
+      retries: 10
+      delay: 3
+
+    - name: Deploy Prometheus config
+      template:
+        src: templates/prometheus.yml.j2
+        dest: /etc/prometheus/prometheus.yml
+        validate: promtool check config %s
+      notify: Restart prometheus
+
+    - name: Prometheus listens only on localhost behind nginx
+      lineinfile:
+        path: /etc/default/prometheus
+        regexp: '^ARGS='
+        line: 'ARGS="--web.listen-address=127.0.0.1:9090 --web.external-url=http://{{ server_name }}/prometheus/ --web.route-prefix=/"'
+      notify: Restart prometheus
+
+    - name: Basic auth for Prometheus
+      community.general.htpasswd:
+        path: /etc/nginx/.htpasswd
+        name: "{{ prometheus_user }}"
+        password: "{{ prometheus_password }}"
+        owner: root
+        group: www-data
+        mode: '0640'
+      no_log: true
+
+    - name: Deploy nginx site
+      template:
+        src: templates/meteotrace.conf.j2
+        dest: /etc/nginx/sites-available/{{ server_name }}
+      notify: Reload nginx
+
+    - name: Enable nginx site
+      file:
+        src: /etc/nginx/sites-available/{{ server_name }}
+        dest: /etc/nginx/sites-enabled/{{ server_name }}
+        state: link
+      notify: Reload nginx
+
+  handlers:
+    - name: Restart app container
+      community.docker.docker_container:
+        name: forecast-service
+        image: "{{ app_image }}:{{ app_version }}"
+        state: started
+        restart: true
+
+    - name: Restart prometheus
+      service:
+        name: prometheus
+        state: restarted
+
+    - name: Reload nginx
+      service:
+        name: nginx
+        state: reloaded
