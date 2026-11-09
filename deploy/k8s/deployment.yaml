@@ -1,0 +1,43 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: forecast-service
+  labels:
+    app: forecast-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: forecast-service
+  template:
+    metadata:
+      labels:
+        app: forecast-service
+    spec:
+      containers:
+        - name: forecast-service
+          image: meteotrace/forecast-service:1.0.0
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8000
+          env:
+            - name: APP_ENV
+              value: production
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
